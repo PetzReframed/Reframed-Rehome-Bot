@@ -1,0 +1,38 @@
+name: reframed-rehome-bot
+services:
+  bot:
+    container_name: reframed-rehome-bot
+    image: ${BOT_IMAGE:-ghcr.io/petzreframed/reframed-rehome-bot:main}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    mem_limit: 128m
+    cpus: 0.5
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      REHOMING_DIR: /rehoming
+      STATE_DIR: /state
+    volumes:
+      # The game server's rehoming folder on this host, read only: the bot never writes to it.
+      - type: bind
+        source: ${REHOMING_HOST_DIR:?Set REHOMING_HOST_DIR to the game server's rehoming folder}
+        target: /rehoming
+        read_only: true
+        bind:
+          create_host_path: false
+      # Each waiting pet's message ID and the facts its message shows.
+      - type: volume
+        source: state
+        target: /state
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '3'
+volumes:
+  state:

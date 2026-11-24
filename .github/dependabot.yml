@@ -1,0 +1,20 @@
+# Dependabot opens pull requests for outdated dependencies; it never pushes to the default branch.
+version: 2
+updates:
+  # Actions used by the workflow (pinned by commit, with the version in a comment).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: ci
+
+  # The base image of the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
