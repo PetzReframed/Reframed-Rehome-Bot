@@ -1,7 +1,7 @@
 # Reframed Rehome Bot
 
 Announces in a Discord channel the pets that wait for a new home on a
-[Petz 5 Reframed](https://github.com/PetzReframed/Reframed) server, and says so when one has been adopted.
+[Reframed](https://github.com/PetzReframed/Reframed) server (Petz 5's Adoption Center), and says so when one has been adopted.
 
 With rehoming turned on, a player who returns a pet at the Adoption Center may let another player adopt it. The game
 server keeps each such pet as a file in a folder of its own. This bot reads that folder: for every pet that newly
