@@ -1,6 +1,6 @@
 """The game server's rehoming folder, read only.
 
-The server (Petz5Reframed, server/petz/rehoming.py) keeps every pet a player offered to other players as one file:
+The server (Reframed, server/petz/rehoming.py) keeps every pet a player offered to other players as one file:
 
 - available/<id>.<hash>.<hash>.pet while the pet waits at the Adoption Center;
 - claimed/<id>.<hash>.<hash>.<expiry>.<cap>.pet while it is out on a visit with a player who may adopt it.

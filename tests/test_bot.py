@@ -1,6 +1,6 @@
 """The bot against a rehoming folder made here, as the game server keeps one, and a stand-in for Discord.
 
-The pet files are made here as well, from these facts of the stored format (Petz5Reframed, server/petz/pet_file.py):
+The pet files are made here as well, from these facts of the stored format (Reframed, server/petz/pet_file.py):
 a 0x330-byte header with the name at 2, the breed at 0x102, the breed path at 0x202, the species number at 0x310, the
 version 0x0acb0003 at 0x318, the 16-bit sum of the header's other bytes at 0x31c and of the payload at 0x31e; a
 payload that starts with the marker "p.f.magicpetzIII", 0x9a2 bytes of saved state, nine 32-bit traits, ten bytes,

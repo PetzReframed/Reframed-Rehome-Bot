@@ -2,7 +2,7 @@
 
 The picture is a Windows DIB: a 40-byte BITMAPINFOHEADER, then 80 rows of 108 pixels, three bytes each in the order
 blue, green, red, the bottom row first. A row is 324 bytes, a multiple of four, so rows have no padding. The game
-server stores only pets whose picture has exactly this form (server/petz/pet_file.py in Petz5Reframed).
+server stores only pets whose picture has exactly this form (server/petz/pet_file.py in Reframed).
 
 Discord shows a PNG and not a DIB. The PNG is written here with zlib alone: one IHDR, one IDAT and one IEND chunk,
 8-bit RGB, every row with filter 0. Each pixel becomes a square of SCALE pixels, since 108x80 is very small in a chat.
