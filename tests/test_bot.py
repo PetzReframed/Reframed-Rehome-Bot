@@ -191,7 +191,7 @@ class PictureTests(unittest.TestCase):
         # Bytes after the 80 rows are not part of the picture.
         self.assertEqual(dib_to_png(dib() + b'more'), dib_to_png(dib()))
 
-    def test_clears_only_edge_connected_headshot_blue(self):
+    def test_unmasked_portrait_clears_all_exact_navy_and_preserves_near_navy(self):
         backdrop = (0, 0, 128)
         def pixel(x, y):
             if x < 10 or (x, y) in ((10, 12), (11, 13), (50, 50)):
@@ -199,11 +199,20 @@ class PictureTests(unittest.TestCase):
             return (0, 0, 129)
         _, _, rows = png_pixels(dib_to_png(dib(pixel=pixel)))
         for x, y, expected in ((0, 79, (*backdrop, 0)), (10, 12, (*backdrop, 0)),
-                               (11, 13, (*backdrop, 255)), (50, 50, (*backdrop, 255)),
+                               (11, 13, (*backdrop, 0)), (50, 50, (*backdrop, 0)),
                                (107, 0, (0, 0, 129, 255))):
             for dy in range(3):
                 for dx in range(3):
                     self.assertEqual(rows[y * 3 + dy][x * 3 + dx], expected)
+
+    def test_captured_mask_can_keep_exact_navy_and_clear_near_navy(self):
+        mask = bytearray(1080)
+        mask[0] = 1
+        source = dib(pixel=lambda x, y: (0, 0, 129) if x == 1 else (0, 0, 128))
+        _, _, rows = png_pixels(dib_to_png(source, mask))
+        self.assertEqual(rows[0][0], (0, 0, 128, 255))
+        self.assertEqual(rows[0][3], (0, 0, 129, 0))
+        self.assertEqual(rows[0][6], (0, 0, 128, 0))
 
     def test_anything_but_a_108_by_80_24_bit_picture_is_refused(self):
         for label, data in (('short', dib()[:-1]), ('empty', b''), ('wide', dib(width=109)), ('upside down', dib(height=-80)),
@@ -213,6 +222,33 @@ class PictureTests(unittest.TestCase):
 
 
 class PetFileTests(Folder):
+    def test_listing_sidecar_sets_top_down_alpha_independently_of_portrait_colour(self):
+        self.offer(FIRST)
+        pet_path = self.file_of(FIRST)
+        masks = self.rehoming / 'portraits'
+        masks.mkdir()
+        bitmap = bytearray(1080)
+        bitmap[13] = 16  # first pixel of the second top-down row
+        (masks / (FIRST + '.mask')).write_bytes(bitmap)
+        info = read_pet(pet_path, 1048576)
+        _, _, rows = png_pixels(info.picture)
+        self.assertEqual([rows[0][0][3], rows[3][0][3], rows[3][3][3]], [0, 255, 0])
+
+    def test_wrong_sized_listing_masks_fall_back_to_the_portrait_colours(self):
+        portrait = dib(pixel=lambda x, y: (0, 0, 128) if x == 20 and y == 30 else (0, 0, 129))
+        self.offer(FIRST, pet_file(picture=portrait))
+        path = self.file_of(FIRST)
+        masks = self.rehoming / 'portraits'
+        masks.mkdir()
+        for size in (1079, 1081):
+            with self.subTest(size=size):
+                (masks / (FIRST + '.mask')).write_bytes(bytes(size))
+                pet = read_pet(path, 1048576)
+                self.assertIsNotNone(pet)
+                _, _, rows = png_pixels(pet.picture)
+                self.assertEqual(rows[90][60], (0, 0, 128, 0))
+                self.assertEqual(rows[90][63], (0, 0, 129, 255))
+
     def test_the_name_the_breed_the_animal_the_sex_and_the_picture_are_read(self):
         pet = parse_pet(pet_file(), OFFERED)
         self.assertEqual((pet.name, pet.breed, pet.animal, pet.female, pet.offered), ('Biscuit', 'Calico', 'cat', True, OFFERED))
@@ -360,6 +396,25 @@ class TrackerTests(Folder):
         self.tracker().run_once()
         self.assertEqual(self.discord.contents(), ['**Biscuit** the Calico is no longer at the Adoption Center.\n'
                          f'Male cat, offered <t:{OFFERED}:f>, left some time before <t:{NOW}:f>.'])
+
+    def test_first_seen_on_a_visit_posts_a_portrait_using_the_listing_mask(self):
+        tracker = self.tracker()
+        tracker.run_once()
+        self.offer(FIRST, pet_file(picture=dib(pixel=lambda x, y: (0, 0, 128))))
+        self.claim(FIRST)
+        masks = self.rehoming / 'portraits'
+        masks.mkdir()
+        mask = bytearray(1080)
+        mask[-1] = 0x80  # Bottom right pixel in the top-down coverage.
+        (masks / (FIRST + '.mask')).write_bytes(mask)
+        tracker.run_once()
+        self.assertEqual(self.stored_state()[FIRST]['where'], 'claimed')
+        self.assertEqual(self.discord.calls, ['post'])
+        [(name, attachment)] = self.discord.messages['1000']['files']
+        self.assertEqual(name, 'pet.png')
+        _, _, rows = png_pixels(attachment)
+        self.assertEqual(rows[-1][-1], (0, 0, 128, 255))
+        self.assertEqual(rows[-1][-4], (0, 0, 128, 0))
 
     def test_the_picture_is_left_out_when_asked_for(self):
         self.offer(FIRST)

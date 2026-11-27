@@ -22,45 +22,29 @@ def _chunk(kind: bytes, data: bytes) -> bytes:
 
 
 def _portrait_alpha(dib: bytes) -> bytearray:
-    """Clear palette entry four only where it connects to a border, as in the game's portrait preview."""
-    area = WIDTH * HEIGHT
-    alpha = bytearray([255]) * area
-    pending = []
-
-    def visit(i):
-        start = DIB_HEADER + 3 * i
-        if alpha[i] and dib[start:start + 3] == bytes((128, 0, 0)):  # BGR
-            alpha[i] = 0
-            pending.append(i)
-
-    for x in range(WIDTH):
-        visit(x)
-        visit(area - WIDTH + x)
-    for y in range(1, HEIGHT - 1):
-        visit(y * WIDTH)
-        visit(y * WIDTH + WIDTH - 1)
-    while pending:
-        i = pending.pop()
-        x = i % WIDTH
-        if x:
-            visit(i - 1)
-        if x + 1 < WIDTH:
-            visit(i + 1)
-        if i >= WIDTH:
-            visit(i - WIDTH)
-        if i + WIDTH < area:
-            visit(i + WIDTH)
-    return alpha
+    """Use exact native palette entry four as the transparency key for an unmasked headshot."""
+    navy_bgr = bytes((128, 0, 0))
+    return bytearray(0 if dib.startswith(navy_bgr, offset) else 255
+                     for offset in range(DIB_HEADER, DIB_SIZE, 3))
 
 
-def dib_to_png(dib: bytes) -> bytes:
+def dib_to_png(dib: bytes, coverage: bytes | None = None) -> bytes:
     """The PNG of a 108x80 24-bit uncompressed DIB; ValueError for anything else."""
     if len(dib) < DIB_SIZE:
         raise ValueError('The picture is too short')
     size, width, height, planes, bits, compression = struct.unpack_from('<IiiHHI', dib, 0)
     if (size, width, height, planes, bits, compression) != (DIB_HEADER, WIDTH, HEIGHT, 1, 24, 0):
         raise ValueError('The picture is not a 108x80 24-bit picture')
-    alpha = _portrait_alpha(dib)
+    if coverage is None:
+        alpha = _portrait_alpha(dib)
+    else:
+        if len(coverage) != WIDTH * HEIGHT // 8:
+            raise ValueError('The portrait coverage is the wrong size')
+        alpha = bytearray(WIDTH * HEIGHT)
+        for i in range(WIDTH * HEIGHT):
+            if coverage[i // 8] & (1 << (i % 8)):
+                y, x = divmod(i, WIDTH)
+                alpha[(HEIGHT - 1 - y) * WIDTH + x] = 255
     rows = bytearray()
     for y in range(HEIGHT - 1, -1, -1):  # The DIB's last row is the top of the picture.
         start = DIB_HEADER + y * ROW

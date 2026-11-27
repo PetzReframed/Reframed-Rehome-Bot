@@ -8,7 +8,8 @@ The server (Reframed, server/petz/rehoming.py) keeps every pet a player offered 
 The ID is 24 hex digits, made by the server for each offer; the same pet offered again gets a new one. A file appears
 complete, by one rename from a .pending-<id> name, and moves between the two folders by one rename; a renewed visit
 renames the file inside claimed/. When the server accepts an adoption it deletes the file from claimed/. An offer taken
-back right after it was made is deleted from available/. Nothing else is recorded: no list, no history, no adopter.
+back right after it was made is deleted from available/. When the game supplied a portrait mask, the server also
+keeps portraits/<id>.mask while the listing exists.
 The file's modification time is when the pet was offered (renames keep it; the game shows it as "Waiting since").
 
 So a scan can miss a pet that is being renamed just then; the tracker looks twice before it takes a pet as gone.
@@ -234,7 +235,7 @@ def _profile(data: bytes, species: int):
     return bool(female), bool(fixed), date, stage, born, purebred
 
 
-def _picture(data: bytes) -> bytes:
+def _picture(data: bytes, coverage: bytes | None) -> bytes:
     # The block ends the file, so its size field must equal what follows it. The marker is searched for only where
     # the largest block could start.
     at = data.find(PICTURE, max(HEADER, len(data) - MAX_PICTURE - len(PICTURE) - 4))
@@ -242,14 +243,14 @@ def _picture(data: bytes) -> bytes:
         dib = at + len(PICTURE) + 4
         if dib <= len(data) and DIB_SIZE <= _int(data, dib - 4) == len(data) - dib:
             try:
-                return dib_to_png(data[dib:])
+                return dib_to_png(data[dib:], coverage)
             except ValueError as error:
                 raise PetFileError(str(error)) from None
         at = data.find(PICTURE, at + 1)
     raise PetFileError('The picture block is missing')
 
 
-def parse_pet(data: bytes, offered: int) -> Pet:
+def parse_pet(data: bytes, offered: int, coverage: bytes | None = None) -> Pet:
     """What the bot shows of a stored pet file; PetFileError when the bytes do not read as one."""
     if len(data) < HEADER:
         raise PetFileError('The header is incomplete')
@@ -264,7 +265,7 @@ def parse_pet(data: bytes, offered: int) -> Pet:
         raise PetFileError('The species is not one the game has')
     folder = path.split('\\')[2] if path.startswith('\\Resource\\') else ''
     female, fixed, date, stage, born, purebred = _profile(data, species)
-    return Pet(name, breed, ANIMALS.get(folder, 'dog' if species else 'cat'), female, offered, _picture(data),
+    return Pet(name, breed, ANIMALS.get(folder, 'dog' if species else 'cat'), female, offered, _picture(data, coverage),
                fixed=fixed, adopted=date, age_stage=stage, born=born, purebred=purebred)
 
 
@@ -277,6 +278,18 @@ def read_pet(path: Path, max_bytes: int) -> Pet | None:
             if not stat.S_ISREG(status.st_mode) or status.st_size > max_bytes:
                 return None
             data = stream.read(max_bytes + 1)
-        return parse_pet(data, int(status.st_mtime)) if len(data) <= max_bytes else None
+        coverage = None
+        match = (AVAILABLE if path.parent.name == 'available' else CLAIMED).fullmatch(path.name)
+        if match:
+            sidecar = path.parent.parent / 'portraits' / (match[1] + '.mask')
+            try:
+                if stat.S_ISREG(sidecar.lstat().st_mode):
+                    with sidecar.open('rb') as stream:
+                        mask = stream.read(1081)
+                    if len(mask) == 1080:
+                        coverage = mask
+            except OSError:
+                pass
+        return parse_pet(data, int(status.st_mtime), coverage) if len(data) <= max_bytes else None
     except (OSError, PetFileError):
         return None

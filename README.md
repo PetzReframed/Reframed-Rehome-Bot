@@ -67,7 +67,9 @@ Two limits to know about:
   game hides it; the bot cannot make that check and would post such a pet with `POST_EXISTING=true`. A message already
   posted is not withdrawn when a word is added later. Delete it in Discord: the bot then leaves it alone.
 - The picture is the one saved in the pet's file by the offering player's game, 108×80 pixels, posted three times as
-  large. Neither the server nor the bot looks at what it shows. Set `ATTACH_PICTURE=false` to post text alone.
+  large. Captured portrait masks preserve each pixel's original coverage. For a listing without a mask, every pixel
+  of exact navy (RGB 0, 0, 128) becomes transparent, including isolated patches. Similar colours stay opaque.
+  Neither the server nor the bot looks at what it shows. Set `ATTACH_PICTURE=false` to post text alone.
 
 ## Set-up
 
