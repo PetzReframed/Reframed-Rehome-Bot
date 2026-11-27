@@ -7,7 +7,7 @@ payload that starts with the marker "p.f.magicpetzIII", 0x9a2 bytes of saved sta
 three counted colour tables (512 bytes, 15 and 512 32-bit values), four bytes, the marker again, two LnZ texts each
 ended by a zero byte and AA CC BB 03, 0xdcc bytes, the counted appearance records, the marker a third time and then
 the sex byte; and, as the last block of the file, the marker "PFMAGICPETZIII", a 32-bit size and a 108x80 24-bit DIB.
-The payload between the sex byte and the picture, which the bot does not read, is a short filler here.
+The genome, attitude tables and family tree follow the saved flags in the server's field order.
 """
 import io
 import json
@@ -40,7 +40,8 @@ def dib(pixel=lambda x, y: (x, y, 255 - x), *, width=108, height=80, bits=24):
 
 
 def pet_file(name=b'Biscuit', breed=b'Calico', folder=b'Catz', extension=b'cat', species=0, female=True,
-             records=((1, b'texture'),), picture=None):
+             records=((1, b'texture'),), picture=None, age=30, fixed=False, dates=(0, 0), born=False, purebred=True,
+             pregnant=False):
     """A stored pet file as far as the bot reads one."""
     header = bytearray(0x330)
     path = b'\\Resource\\' + folder + b'\\' + breed + b'.' + extension
@@ -48,12 +49,23 @@ def pet_file(name=b'Biscuit', breed=b'Calico', folder=b'Catz', extension=b'cat',
         header[start:start + len(text)] = text
     struct.pack_into('<i', header, 0x310, species)
     struct.pack_into('<I', header, 0x318, 0x0ACB0003)
-    payload = (STATE + bytes(1 + 4 * 8 + 1 + 4 * 8 + 0x960) + struct.pack('<9i', *[50] * 8, 30) + bytes(4 + 6)
+    def family(first, second, flags, parent=b''):
+        text = lambda value: struct.pack('<i', len(value)) + value
+        return (bytes(16) + text(name) + text(breed) + text(b'') + struct.pack('<iiiB', first, second, 0, flags)
+                + bytes([bool(parent)]) + parent + b'\0')
+    genome = b''.join(struct.pack('<i', n) + bytes(n * 15) for n in (41, 22, 25) * 2)
+    payload = (STATE + bytes(1 + 4 * 8 + 1 + 4 * 8 + 0x960) + struct.pack('<9i', *[50] * 8, age) + bytes(4 + 6)
                + b''.join(struct.pack('<i', size) + bytes(size * stride) for size, stride in ((512, 1), (15, 4), (512, 4)))
                + bytes(4) + STATE + b'[Adult]\r\n\0' + LNZ_END + b'[Juvenile]\r\n\0' + LNZ_END + bytes(4 + 0xdc8)
                + struct.pack('<i', len(records))
                + b''.join(struct.pack('<Hi', number, len(text)) + text for number, text in records)
-               + STATE + bytes((female, 0, 0, 0)) + b'the rest of the payload, which the bot does not read')
+               + STATE + bytes((female, fixed, 0, pregnant)) + bytes(8) + genome + bytes(4))
+    if pregnant:
+        payload += genome + family(123, 456, 1) + bytes(5)
+    payload += (STATE + struct.pack('<i', 41) + bytes(41 * 23) + struct.pack('<i', 22) + bytes(22 * 23)
+                + bytes(20) + b'PfMaGiCpEtZIII\0' + bytes(4)
+                + family(*dates, purebred, family(111, 222, 1) if born else b'')
+                + bytes(16 + 1 + 77 + 12))
     picture = dib() if picture is None else picture
     struct.pack_into('<H', header, 0x31e, sum(payload) & 0xffff)
     struct.pack_into('<H', header, 0x31c, sum(header) & 0xffff)
@@ -61,7 +73,7 @@ def pet_file(name=b'Biscuit', breed=b'Calico', folder=b'Catz', extension=b'cat',
 
 
 def png_pixels(png):
-    """The size of a PNG written by the bot and its rows of (red, green, blue), after checking every chunk's CRC."""
+    """The size of a PNG written by the bot and its rows of (red, green, blue, alpha), after checking every chunk's CRC."""
     assert png[:8] == b'\x89PNG\r\n\x1a\n'
     chunks, at = [], 8
     while at < len(png):
@@ -72,14 +84,14 @@ def png_pixels(png):
         at += 12 + length
     assert [kind for kind, _ in chunks] == [b'IHDR', b'IDAT', b'IEND']
     width, height, depth, colour, compression, filtering, interlace = struct.unpack('>IIBBBBB', chunks[0][1])
-    assert (depth, colour, compression, filtering, interlace) == (8, 2, 0, 0, 0)
+    assert (depth, colour, compression, filtering, interlace) == (8, 6, 0, 0, 0)
     raw = zlib.decompress(chunks[1][1])
-    assert len(raw) == height * (1 + width * 3)
+    assert len(raw) == height * (1 + width * 4)
     rows = []
     for y in range(height):
-        row = raw[y * (1 + width * 3):(y + 1) * (1 + width * 3)]
+        row = raw[y * (1 + width * 4):(y + 1) * (1 + width * 4)]
         assert row[0] == 0
-        rows.append([tuple(row[1 + x * 3:4 + x * 3]) for x in range(width)])
+        rows.append([tuple(row[1 + x * 4:5 + x * 4]) for x in range(width)])
     return width, height, rows
 
 
@@ -175,9 +187,23 @@ class PictureTests(unittest.TestCase):
         for x, y in ((0, 0), (107, 0), (0, 79), (107, 79), (53, 40)):
             for dx, dy in ((0, 0), (2, 2)):
                 with self.subTest(x=x, y=y, dx=dx):
-                    self.assertEqual(rows[y * 3 + dy][x * 3 + dx], (x, y, 255 - x))
+                    self.assertEqual(rows[y * 3 + dy][x * 3 + dx], (x, y, 255 - x, 255))
         # Bytes after the 80 rows are not part of the picture.
         self.assertEqual(dib_to_png(dib() + b'more'), dib_to_png(dib()))
+
+    def test_clears_only_edge_connected_headshot_blue(self):
+        backdrop = (0, 0, 128)
+        def pixel(x, y):
+            if x < 10 or (x, y) in ((10, 12), (11, 13), (50, 50)):
+                return backdrop
+            return (0, 0, 129)
+        _, _, rows = png_pixels(dib_to_png(dib(pixel=pixel)))
+        for x, y, expected in ((0, 79, (*backdrop, 0)), (10, 12, (*backdrop, 0)),
+                               (11, 13, (*backdrop, 255)), (50, 50, (*backdrop, 255)),
+                               (107, 0, (0, 0, 129, 255))):
+            for dy in range(3):
+                for dx in range(3):
+                    self.assertEqual(rows[y * 3 + dy][x * 3 + dx], expected)
 
     def test_anything_but_a_108_by_80_24_bit_picture_is_refused(self):
         for label, data in (('short', dib()[:-1]), ('empty', b''), ('wide', dib(width=109)), ('upside down', dib(height=-80)),
@@ -203,6 +229,22 @@ class PetFileTests(Folder):
                 pet = parse_pet(data, OFFERED)
                 self.assertEqual((pet.name, pet.breed, pet.animal, pet.female), expected)
 
+    def test_profile_date_and_flags_come_from_the_pet_own_family_record(self):
+        pet = parse_pet(pet_file(female=True, fixed=True, dates=(1000, 2000), born=True,
+                                 purebred=False, pregnant=True), OFFERED)
+        self.assertEqual((pet.fixed, pet.adopted, pet.born, pet.purebred), (True, 2000, True, False))
+        pet = parse_pet(pet_file(dates=(1000, 0)), OFFERED)
+        self.assertEqual((pet.fixed, pet.adopted, pet.born, pet.purebred), (False, 1000, False, True))
+        self.assertIsNone(parse_pet(pet_file(), OFFERED).adopted)
+
+    def test_shared_profile_age_labels_use_the_species_and_saved_growth_trait(self):
+        for age, expected in [(0, 'Newborn'), (5, 'Newborn'), (6, 'Infant'), (11, 'Infant'),
+                              (12, 'Kitten'), (29, 'Kitten'), (30, 'Adult'), (100, 'Adult')]:
+            with self.subTest(age=age):
+                self.assertEqual(parse_pet(pet_file(age=age), OFFERED).age_stage, expected)
+        self.assertEqual(parse_pet(pet_file(age=12, folder=b'Bunnyz', breed=b'Bunny'), OFFERED).age_stage, 'Kitten')
+        self.assertEqual(parse_pet(pet_file(age=29, species=1, folder=b'Pigz', breed=b'Pig'), OFFERED).age_stage, 'Puppy')
+
     def test_a_file_cut_short_at_any_place_is_refused_and_never_read_past_its_end(self):
         whole = pet_file()
         for cut in sorted({*range(0, len(whole), 997), 0x32f, 0x330, 0x340, len(whole) - 25961, len(whole) - 1}):
@@ -213,7 +255,7 @@ class PetFileTests(Folder):
         def changed(data, at, value):
             return data[:at] + value + data[at + len(value):]
         whole = pet_file()
-        sex = whole.index(STATE + bytes((1, 0, 0, 0)) + b'the rest') + len(STATE)
+        sex = whole.index(STATE + bytes((1, 0, 0, 0)) + bytes(8)) + len(STATE)
         records = whole.index(struct.pack('<i', 1) + struct.pack('<Hi', 1, 7) + b'texture')
         for label, data in (
                 ('not a pet file', b'GIF89a' + bytes(4096)),
@@ -264,7 +306,9 @@ class PetFileTests(Folder):
 
 
 class TrackerTests(Folder):
-    WAITING = '**Biscuit** the Calico is looking for a home.\nFemale cat, waiting at the Adoption Center since <t:1795428960:f>.'
+    CALICO_FACTS = ('Breed: Calico\nGender: Female\nAdopted: Unknown\nAge: Adult\nSpayed: No\n'
+                    f'Waiting since: <t:{OFFERED}:f>')
+    WAITING = '**Biscuit** the Calico is looking for a home.\n' + CALICO_FACTS
 
     def test_a_new_pet_is_posted_once_with_its_picture(self):
         tracker = self.tracker()
@@ -276,7 +320,9 @@ class TrackerTests(Folder):
         self.assertEqual((posted['channel'], posted['content']), (ENV['DISCORD_CHANNEL_ID'], self.WAITING))
         self.assertEqual(posted['files'], [('pet.png', dib_to_png(dib()))])
         self.assertEqual(self.stored_state(), {FIRST: {'message': message, 'where': 'available', 'name': 'Biscuit',
-                                                       'breed': 'Calico', 'animal': 'cat', 'female': True, 'offered': OFFERED}})
+                                                       'breed': 'Calico', 'animal': 'cat', 'female': True, 'offered': OFFERED,
+                                                       'age_stage': 'Adult', 'fixed': False, 'born': False,
+                                                       'adopted': None, 'purebred': True}})
         # Nothing is posted twice, also after a restart, and nothing is edited while the pet waits.
         tracker.run_once()
         self.tracker().run_once()
@@ -284,6 +330,36 @@ class TrackerTests(Folder):
         # The bot leaves the rehoming folder as it found it.
         self.assertEqual(sorted(p.name for p in self.rehoming.rglob('*')),
                          [f'{FIRST}.{WITHDRAW}.{NO_CLAIM}.pet', 'available', 'claimed'])
+
+    def test_a_mixed_kitten_keeps_its_birth_date_and_spay_status_after_restart(self):
+        born_at = 1600000000
+        tracker = self.tracker()
+        tracker.run_once()
+        self.offer(FIRST, pet_file(age=12, fixed=True, born=True, purebred=False, dates=(born_at, born_at)))
+        tracker.run_once()
+        facts = ('Breed: Mixed Breed\nGender: Female\nBorn: <t:1600000000:D>\nAge: Kitten\n'
+                 f'Spayed: Yes\nWaiting since: <t:{OFFERED}:f>')
+        self.assertEqual(self.discord.contents(), ['**Biscuit** the Calico is looking for a home.\n' + facts])
+        self.claim(FIRST)
+        tracker.run_once()
+        self.delete(FIRST)
+        self.tracker().run_once()
+        self.assertEqual(self.discord.contents(), ['**Biscuit** the Calico has been adopted.\n'
+                                                  + facts + f'\nRehomed: some time before <t:{NOW}:f>'])
+
+    def test_dated_adoption_and_legacy_announcements_keep_their_distinct_formats(self):
+        self.offer(FIRST, pet_file(female=False, fixed=True, dates=(1600000000, 1600000000)))
+        self.tracker(POST_EXISTING='true').run_once()
+        self.assertEqual(self.discord.contents()[0].splitlines()[2:6],
+                         ['Gender: Male', 'Adopted: <t:1600000000:D>', 'Age: Adult', 'Neutered: Yes'])
+        record = self.stored_state()[FIRST]
+        for key in ('age_stage', 'born', 'adopted', 'fixed', 'purebred'):
+            del record[key]
+        (self.state / 'pets.json').write_text(json.dumps({'version': 1, 'pets': {FIRST: record}}), encoding='utf-8')
+        self.delete(FIRST)
+        self.tracker().run_once()
+        self.assertEqual(self.discord.contents(), ['**Biscuit** the Calico is no longer at the Adoption Center.\n'
+                         f'Male cat, offered <t:{OFFERED}:f>, left some time before <t:{NOW}:f>.'])
 
     def test_the_picture_is_left_out_when_asked_for(self):
         self.offer(FIRST)
@@ -304,7 +380,7 @@ class TrackerTests(Folder):
         self.assertEqual(self.discord.calls, ['post', 'edit'])
         self.assertEqual(self.discord.contents(), [
             '**Biscuit** the Calico has been adopted.\n'
-            f'Female cat, offered <t:1795428960:f>, adopted <t:{NOW + 300}:f>.'])
+            + self.CALICO_FACTS + f'\nRehomed: <t:{NOW + 300}:f>'])
         # The picture stays, and the pet is forgotten: later passes and a restart do nothing more.
         self.assertEqual([name for name, _ in self.discord.messages['1000']['files']], ['pet.png'])
         self.assertEqual(self.stored_state(), {})
@@ -332,7 +408,7 @@ class TrackerTests(Folder):
         tracker.run_once()
         self.assertEqual(self.discord.contents(), [
             '**Biscuit** the Calico is no longer at the Adoption Center.\n'
-            f'Female cat, offered <t:1795428960:f>, left <t:{NOW + 60}:f>.'])
+            + self.CALICO_FACTS + f'\nLeft: <t:{NOW + 60}:f>'])
 
     def test_a_restart_keeps_each_pets_message_and_says_when_the_time_is_not_known(self):
         first = self.tracker()
@@ -351,14 +427,15 @@ class TrackerTests(Folder):
         self.assertEqual(self.discord.contents(), [
             self.WAITING,
             '**Rex** the Labrador has been adopted.\n'
-            f'Male dog, offered <t:{OFFERED + 60}:f>, adopted some time before <t:{NOW + 7200}:f>.'])
+            'Breed: Labrador\nGender: Male\nAdopted: Unknown\nAge: Adult\nNeutered: No\n'
+            f'Waiting since: <t:{OFFERED + 60}:f>\nRehomed: some time before <t:{NOW + 7200}:f>'])
         # From here the bot is watching again: the next departure has its time.
         self.claim(FIRST)
         second.run_once()
         self.now += 30
         self.delete(FIRST)
         second.run_once()
-        self.assertEqual(self.discord.contents()[0].split(', ')[-1], f'adopted <t:{NOW + 7230}:f>.')
+        self.assertEqual(self.discord.contents()[0].splitlines()[-1], f'Rehomed: <t:{NOW + 7230}:f>')
 
     def test_pets_waiting_at_a_first_start_are_taken_as_known_and_never_posted(self):
         self.offer(FIRST)
@@ -461,7 +538,7 @@ class TrackerTests(Folder):
         self.assertEqual(self.stored_state()[FIRST]['ended'], {'status': 'adopted', 'at': NOW, 'exact': True})
         # Also after a restart: the edit that is still owed is in the state file.
         self.tracker().run_once()
-        self.assertEqual(self.discord.contents()[0].split(', ')[-1], f'adopted <t:{NOW}:f>.')
+        self.assertEqual(self.discord.contents()[0].splitlines()[-1], f'Rehomed: <t:{NOW}:f>')
         self.assertEqual(self.stored_state(), {})
 
     def test_a_deleted_message_is_not_edited_again_and_again(self):
@@ -554,7 +631,7 @@ class TrackerTests(Folder):
         self.delete(FIRST)
         self.now += 900
         tracker.run_once()
-        self.assertEqual(self.discord.contents()[0].split(', ')[-1], f'adopted some time before <t:{NOW + 900}:f>.')
+        self.assertEqual(self.discord.contents()[0].splitlines()[-1], f'Rehomed: some time before <t:{NOW + 900}:f>')
 
     def test_a_first_start_waits_for_a_folder_it_can_read(self):
         (self.rehoming / 'available').rmdir()

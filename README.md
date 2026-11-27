@@ -5,7 +5,7 @@ Announces in a Discord channel the pets that wait for a new home on a
 
 With rehoming turned on, a player who returns a pet at the Adoption Center may let another player adopt it. The game
 server keeps each such pet as a file in a folder of its own. This bot reads that folder: for every pet that newly
-waits there it posts one message, with the pet's name, breed, sex, saved picture and the time it was offered. When the
+waits there it posts one message, with the pet's profile, saved picture and the time it was offered. When the
 pet has left, the bot edits that same message; it never posts a second one about the same offer.
 
 It has no commands and listens to nothing: it only sends and edits its own messages. It needs no change to the game
@@ -16,20 +16,15 @@ server and opens no port. What happened while the bot was stopped is caught up w
 While the pet waits:
 
 > **Biscuit** the Calico is looking for a home.
-> Female cat, waiting at the Adoption Center since 23 November 2026 10:16.
+> Breed: Calico\
+> Gender: Female\
+> Adopted: 12 November 2026\
+> Age: Kitten\
+> Spayed: No\
+> Waiting since: 23 November 2026 10:16\
 > 📎 pet.png
 
-After its adoption, the same message:
-
-> **Biscuit** the Calico has been adopted.
-> Female cat, offered 23 November 2026 10:16, adopted 24 November 2026 18:02.
-> 📎 pet.png
-
-When the pet left without the bot having seen it out on a visit:
-
-> **Biscuit** the Calico is no longer at the Adoption Center.
-> Female cat, offered 23 November 2026 10:16, left 24 November 2026 18:02.
-> 📎 pet.png
+For a home-born pet the date is labeled **Born**. When the pet leaves, the bot keeps the profile and edits the heading and departure time. A confirmed adoption adds **Rehomed**. A departure with an unknown outcome adds **Left**.
 
 Times are shown by Discord in each reader's own time zone. When the bot was not watching at the time (it was stopped,
 or could not read the folder), the last part reads "adopted some time before …" or "left some time before …", with
@@ -63,8 +58,7 @@ So:
 - The same pet offered again later is a new offer with a new ID on the server, and gets a new message.
 - Nobody who offered or adopted a pet is named: the server removes the previous owner's name and comments from the
   file before it stores it, and records no adopter. The bot posts only what the game itself shows every player in
-  **Petz Looking for a Home**: the name, the breed, the sex, the picture and since when the pet waits. The pet's age
-  is not posted: the file holds a number that the game turns into a word of its own, which the bot does not have.
+  **Petz Looking for a Home**: the name, breed, gender, original adoption or birth date, age category, spay or neuter status, picture and waiting time.
 
 Two limits to know about:
 

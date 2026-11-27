@@ -21,8 +21,8 @@ where it should be. What is read:
 - the header, 0x330 bytes: the pet's name at 2, its breed at 0x102 and the breed file's path at 0x202 (each text
   ends with a zero byte, in Windows-1252), the species number at 0x310 (0 cat, 1 dog), the format version at 0x318
   and at 0x31c the 16-bit sum of the header's other bytes;
-- the sex, one byte after the appearance block: found by stepping over the saved state, the nine saved traits, the
-  three saved colour tables with their fixed counts, the two LnZ texts and the appearance records;
+- the age from the ninth saved trait, the sex and spayed/neutered bytes after the appearance records, and the
+  profile date, first parent and purebred flag from the pet’s own family record;
 - the picture, the last block of the file: a marker, a 32-bit size, and a DIB of that size up to the file's end.
 
 A file that does not read this way is not a pet as far as the bot is concerned.
@@ -66,6 +66,11 @@ class Pet:
     female: bool
     offered: int   # Unix time
     picture: bytes  # PNG
+    fixed: bool | None = None
+    adopted: int | None = None  # Profile date (birth when born), signed Unix seconds
+    age_stage: str | None = None
+    born: bool | None = None
+    purebred: bool | None = None
 
 
 def scan(directory: Path, max_pets: int) -> dict[str, tuple[str, Path]]:
@@ -108,15 +113,18 @@ def _text(field: bytes) -> str:
     return field[:end].decode('cp1252', 'replace')
 
 
-def _female(data: bytes) -> bool:
-    at = _marker(data, HEADER, STATE)
-    at += 1 + 4 * 8 + 1 + 4 * 8 + 0x960  # saved state
-    at += 9 * 4 + 4 + 6                  # the nine saved traits and the fields after them
-    for size, stride in ((512, 1), (15, 4), (512, 4)):  # saved colours, each after its count
-        if _int(data, at) != size:
-            raise PetFileError('A saved-colour count is not the one the game writes')
-        at += 4 + size * stride
-    at = _marker(data, at + 4, STATE)
+def _count(data, at, limit=4096):
+    value = _int(data, at)
+    if not 0 <= value <= limit:
+        raise PetFileError('A profile record count is out of range')
+    return value
+
+
+def _rows(data, at, stride):
+    return at + 4 + _count(data, at) * stride
+
+
+def _aggregate(data, at):
     for _ in range(2):  # the adult and the juvenile LnZ text
         end = data.find(b'\0', at, at + MAX_LNZ + 1)
         if end < 0:
@@ -132,10 +140,98 @@ def _female(data: bytes) -> bool:
         if not 0 <= length <= MAX_RECORD_TEXT:
             raise PetFileError('An appearance record is too long')
         at += 6 + length
+    return at
+
+
+def _genome(data, at):
+    for count in (41, 22, 25) * 2:
+        if _int(data, at) != count:
+            raise PetFileError('Unexpected chromosome size')
+        at += 4 + count * 15
+    return at
+
+
+def _ancestry(data, at):
+    # Consume parent records structurally. An ancestor's flags and dates belong to that ancestor alone.
+    nodes = 0
+    def read(at, depth):
+        nonlocal nodes
+        nodes += 1
+        if nodes > 1024 or depth > 64:
+            raise PetFileError('Family tree exceeds game limits')
+        at += 16
+        for _ in range(3):  # name, breed and adopter
+            at += 4 + _count(data, at, 255)
+        first, second = _int(data, at), _int(data, at + 4)
+        at += 12
+        if at >= len(data) or data[at] > 3:
+            raise PetFileError('Invalid ancestry flags')
+        purebred = bool(data[at] & 1)
+        at += 1
+        born = False
+        for parent in range(2):
+            if at >= len(data) or data[at] > 1:
+                raise PetFileError('Invalid ancestry parent')
+            present = data[at]
+            at += 1
+            if present:
+                if parent == 0:
+                    born = True
+                at, _ = read(at, depth + 1)
+        return at, (second or first or None, born, purebred)
+    return read(at, 0)
+
+
+def _profile(data: bytes, species: int):
+    at = _marker(data, HEADER, STATE)
+    at += 1 + 4 * 8 + 1 + 4 * 8 + 0x960  # saved state
+    age = _int(data, at + 8 * 4)
+    if not 0 <= age <= 100:
+        raise PetFileError('The age trait is out of range')
+    at += 9 * 4 + 4 + 6                  # the nine saved traits and the fields after them
+    for size, stride in ((512, 1), (15, 4), (512, 4)):  # saved colours, each after its count
+        if _int(data, at) != size:
+            raise PetFileError('A saved-colour count is not the one the game writes')
+        at += 4 + size * stride
+    at = _marker(data, at + 4, STATE)
+    at = _aggregate(data, at)
     at = _marker(data, at, STATE)
-    if at >= len(data) or data[at] > 1:
-        raise PetFileError('The sex byte is missing or not one the server stores')
-    return data[at] == 1
+    flags = data[at:at + 4]
+    if len(flags) != 4 or any(value > 1 for value in flags) or flags[2]:
+        raise PetFileError('Invalid saved pet flags')
+    female, fixed, _, pregnant = flags
+    at += 4
+    history = _count(data, at)
+    at += 4
+    for _ in range(history):
+        at = _rows(data, _rows(data, at + 8, 4), 4)
+    at = _genome(data, _rows(data, at, 40))
+    litter = _count(data, at, 4)
+    at += 4
+    if pregnant:
+        at = _genome(data, at)
+        for _ in range(litter):
+            at = _aggregate(data, at)
+        at, _ = _ancestry(data, at)
+        at += 5
+    at = _marker(data, at, STATE)
+    for count in (41, 22):
+        if _int(data, at) != count:
+            raise PetFileError('Unexpected attitude count')
+        at += 4 + count * 23
+    for stride in (18, 2):  # sprite and goal associations
+        count = _count(data, at)
+        at += 4
+        for _ in range(count):
+            at = _rows(data, at, 4) + stride
+    for stride in (4, 4, 33):
+        at = _rows(data, at, stride)
+    at = _marker(data, at, b'PfMaGiCpEtZIII\0')
+    _, (date, born, purebred) = _ancestry(data, at + 4)
+    # The shared Profile uses species strings 7157/7158 for both adopted and born pets.
+    stages = ('Newborn', 'Infant', 'Puppy' if species else 'Kitten', 'Adult')
+    stage = stages[(age >= 6) + (age >= 12) + (age >= 30)]
+    return bool(female), bool(fixed), date, stage, born, purebred
 
 
 def _picture(data: bytes) -> bytes:
@@ -167,7 +263,9 @@ def parse_pet(data: bytes, offered: int) -> Pet:
     if species not in (0, 1):
         raise PetFileError('The species is not one the game has')
     folder = path.split('\\')[2] if path.startswith('\\Resource\\') else ''
-    return Pet(name, breed, ANIMALS.get(folder, 'dog' if species else 'cat'), _female(data), offered, _picture(data))
+    female, fixed, date, stage, born, purebred = _profile(data, species)
+    return Pet(name, breed, ANIMALS.get(folder, 'dog' if species else 'cat'), female, offered, _picture(data),
+               fixed=fixed, adopted=date, age_stage=stage, born=born, purebred=purebred)
 
 
 def read_pet(path: Path, max_bytes: int) -> Pet | None:

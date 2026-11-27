@@ -48,6 +48,10 @@ def _valid(pet, record) -> bool:
     ended = record.get('ended')
     return (isinstance(record['message'], str) and MESSAGE_ID.fullmatch(record['message']) is not None
             and all(isinstance(record.get(key), kind) for key, kind in FACTS)
+            and (record.get('age_stage') is None or (
+                isinstance(record['age_stage'], str) and isinstance(record.get('fixed'), bool)
+                and isinstance(record.get('born'), bool) and isinstance(record.get('purebred'), bool)
+                and (record.get('adopted') is None or type(record['adopted']) is int)))
             and (ended is None or isinstance(ended, dict) and ended.get('status') in ('adopted', 'left')
                  and isinstance(ended.get('at'), int) and isinstance(ended.get('exact'), bool)))
 
@@ -100,6 +104,25 @@ def message_text(record: dict) -> str:
     about = f"{'Female' if record['female'] else 'Male'} {record['animal']}"
     offered = f"<t:{record['offered']}:f>"
     ended = record.get('ended')
+    if record.get('age_stage') is not None:
+        adopted = record.get('adopted')
+        date = f'<t:{adopted}:D>' if adopted is not None else 'Unknown'
+        title = 'is looking for a home.' if ended is None else (
+            'has been adopted.' if ended['status'] == 'adopted' else 'is no longer at the Adoption Center.')
+        lines = [
+            f'{who} {title}',
+            'Breed: ' + ('Mixed Breed' if record.get('purebred') is False else plain(record['breed'])),
+            'Gender: ' + ('Female' if record['female'] else 'Male'),
+            ('Born: ' if record.get('born') else 'Adopted: ') + date,
+            'Age: ' + plain(record['age_stage']),
+            ('Spayed: ' if record['female'] else 'Neutered: ') + ('Yes' if record['fixed'] else 'No'),
+            f'Waiting since: {offered}',
+        ]
+        if ended:
+            label = 'Rehomed' if ended['status'] == 'adopted' else 'Left'
+            when = f"<t:{ended['at']}:f>"
+            lines.append(f"{label}: {'' if ended['exact'] else 'some time before '}{when}")
+        return '\n'.join(lines)
     if ended is None:
         return f'{who} is looking for a home.\n{about}, waiting at the Adoption Center since {offered}.'
     when = f"<t:{ended['at']}:f>" if ended['exact'] else f"some time before <t:{ended['at']}:f>"
@@ -190,7 +213,8 @@ class Tracker:
                 continue
             self.unreadable.discard(pet)
             record = {'message': None, 'where': where, 'name': info.name, 'breed': info.breed, 'animal': info.animal,
-                      'female': info.female, 'offered': info.offered}
+                      'female': info.female, 'offered': info.offered, 'born': info.born, 'adopted': info.adopted,
+                      'fixed': info.fixed, 'age_stage': info.age_stage, 'purebred': info.purebred}
             files = [(PICTURE_NAME, info.picture)] if config.attach_picture else []
             record['message'] = self.send(config.token, config.channel_id, message_text(record), files, nonce_of(pet))
             self.pets[pet] = record
